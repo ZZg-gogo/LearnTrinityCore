@@ -18,14 +18,14 @@ std::vector<std::string> stringSplit(const std::string& str, const char delimite
 
     for (std::string::size_type end = str.find((delimiter)); 
         end != std::string::npos;
-        end = str.find((delimiter))) 
+        end = str.find(delimiter, start)) 
     {
         if (keepEmpty || start < end) 
         {
             result.push_back(str.substr(start, end-start));
         }
 
-        ++start;
+        start = end+1;
     }
 
     if (keepEmpty || start < str.length()) 
@@ -34,7 +34,7 @@ std::vector<std::string> stringSplit(const std::string& str, const char delimite
     }
 
 
-    return std::move(result);
+    return(result);
 }
 
 
