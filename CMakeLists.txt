@@ -37,7 +37,12 @@ set(src
 add_executable(LearnTrinityCore ${src} ${base_src} ${net_src})
 
 
+# 创建可执行文件
+add_executable(ThreadPoolTest ../test/ThreadPoolTest.cpp)
 
+
+# 创建可执行文件
+add_executable(ProducerConsumerQueueTest ../test/ProducerConsumerQueueTest.cpp)
 
 if(0)
 
