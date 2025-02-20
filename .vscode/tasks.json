@@ -1,0 +1,16 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build hello world",     // task的名字
+            "type": "shell",   
+            "command": "bash ./build.sh",    //编译命令
+            "args": [    //编译参数列表
+            ]
+        }
+    ]
+}
+
+
+
+
