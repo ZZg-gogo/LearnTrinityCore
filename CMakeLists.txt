@@ -25,6 +25,8 @@ set(LIBRARIES Boost::thread Boost::system mysqlclient fmt::fmt)
 # 数据库相关源文件
 set(DATABASE_SRC
 ../Database/MySQLConnection.cpp
+../Database/Field.cpp
+../Database/QueryResult.cpp
 )
 
 

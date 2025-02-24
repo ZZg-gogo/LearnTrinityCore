@@ -1,9 +1,17 @@
-#include "MySQLConnection.h"
-#include "../Utilities/Util.h"
+#include <chrono>
 #include <cstdint>
+#include <cstdlib>
+#include <mysql/mysqld_error.h>
 #include <mysql/errmsg.h>
 #include <mysql/mysql.h>
 #include <spdlog/spdlog.h>
+#include <thread>
+
+#include "MySQLConnection.h"
+#include "../Utilities/Util.h"
+#include "MySQLHacks.h"
+#include "QueryResult.h"
+
 
 namespace DATABASE 
 {
@@ -46,7 +54,10 @@ MysqlConnection::~MysqlConnection()
     close();
 }
 
-
+/**
+* @brief 打开数据库连接
+* @return uint32_t 连接状态
+*/
 uint32_t MysqlConnection::open()
 {
     MYSQL * mysqlInit;
@@ -89,6 +100,15 @@ uint32_t MysqlConnection::open()
     if (mysqlHandler_) 
     {
         spdlog::info("mysql_real_connect open success {}:{}", connectionInfo_.host, connectionInfo_.database);
+
+        if (!reconnecting_) 
+        {
+            spdlog::info("open sql.sql MySQL client library: {}", mysql_get_client_info());
+            spdlog::info("open sql.sql MySQL server ver: {} ", mysql_get_server_info(mysqlHandler_));
+        }
+
+        mysql_autocommit(mysqlHandler_, 1);
+
         //设置当前连接的默认字符集
         mysql_set_character_set(mysqlHandler_, "utf8mb4");
         return 0;
@@ -114,5 +134,256 @@ void MysqlConnection::close()
     }
     
 }
+
+
+/**
+* @brief sync执行sql语句
+* @param sql 待执行的sql语句
+* @return bool 执行结果
+*/
+bool MysqlConnection::Execute(const char * sql)
+{
+    if (!mysqlHandler_) 
+    {
+        return false;
+    }
+
+    if (mysql_query(mysqlHandler_, sql)) 
+    {
+        uint32_t errorCode = mysql_errno(mysqlHandler_);
+        spdlog::error("Execute sql.sql SQL: {}", sql);
+        spdlog::error("Execute sql.sql  [{}] {}", errorCode, mysql_error(mysqlHandler_));
+
+        //根据错误码 处理错误 如果返回结果是true,那么尝试再次执行sql
+        if (_HandleMySQLErrno(errorCode)) 
+        {
+            return Execute(sql);
+        }
+
+        return false;
+    }
+    else
+    {
+        spdlog::debug("MysqlConnection::Execute succ sql:{}", sql);
+    }
+
+    return true;
+}
+
+
+/**
+* @brief 查询sql语句
+* @param sql 待查询的sql语句
+* @return ResultSet * 查询结果
+*/
+ResultSet * MysqlConnection::Query(const char * sql)
+{
+    if (!sql) 
+    {
+        return nullptr;
+    }
+
+    MySQLResult * result = nullptr;
+    MySQLField * fields = nullptr;
+    uint64_t numRows = 0;
+    uint32_t numFields = 0;
+
+
+    if (_Query(sql, &result, &fields, &numRows, &numFields)) 
+    {
+        return new ResultSet(result, fields, numRows, numFields);
+    }
+
+    
+    return nullptr;
+}
+
+
+/**
+* @brief 查询sql语句
+* @param sql 待查询的sql语句
+* @param pResult 查询结果
+* @param pFields 查询的字段
+* @param pRowCount 查询的行数
+* @param pFieldCount 查询的字段数
+*/
+bool MysqlConnection::_Query(char const* sql, MySQLResult** pResult, MySQLField** pFields, uint64_t* pRowCount, uint32_t* pFieldCount)
+{
+    if (!mysqlHandler_) 
+    {
+        return false;
+    }
+
+    //mysql查询出现问题了
+    if (mysql_query(mysqlHandler_, sql)) 
+    {
+        uint32_t errorCode = mysql_errno(mysqlHandler_);
+        spdlog::error("MysqlConnection::_Query sql.sql SQL: {}", sql);
+        spdlog::error("MysqlConnection::_Query sql.sql  [{}] {}", errorCode, mysql_error(mysqlHandler_));
+        //错误处理后 进行重试
+        if (_HandleMySQLErrno(errorCode)) 
+        {
+            return _Query(sql, pResult, pFields, pRowCount, pFieldCount);
+        }
+
+        return false;
+    }
+
+    spdlog::debug("MysqlConnection::_Query succ sql:{}", sql);
+
+    *pResult = reinterpret_cast<MySQLResult*>(mysql_store_result(mysqlHandler_));
+    *pRowCount = mysql_affected_rows(mysqlHandler_);
+    *pFieldCount = mysql_field_count(mysqlHandler_);
+
+    if (!*pResult) 
+    {
+        return false;
+    }
+
+    if (!*pRowCount) 
+    {
+        mysql_free_result(*pResult);
+        return false;
+    }
+
+    *pFields = reinterpret_cast<MySQLField*>(mysql_fetch_fields(*pResult));
+
+    return true;
+}
+
+
+/**
+* @brief 预处理sql语句
+*/
+bool MysqlConnection::PrepareStatements()
+{
+    doPrepareStatements();
+    return true;
+}
+
+void MysqlConnection::doPrepareStatements()
+{
+    
+}
+
+
+/**
+* @brief 处理mysql错误
+* @param errNo 错误码
+* @param attempts 尝试次数
+* @return bool 错误处理结果
+*/
+bool MysqlConnection::_HandleMySQLErrno(uint32_t errNo, uint8_t attempts)
+{
+
+    switch (errNo) 
+    {
+        case CR_SERVER_GONE_ERROR:  
+        //表示与 MySQL 服务器的连接已丢失
+        case CR_SERVER_LOST:        
+        //表示在查询过程中与 MySQL 服务器的连接丢失
+        case CR_SERVER_LOST_EXTENDED:
+        /*表示在查询过程中与 MySQL 服务器的连接丢失，并提供了更多的错误信息*/
+        {
+            if (mysqlHandler_) 
+            {
+                spdlog::error("_HandleMySQLErrno sql.sql Lost connection to MySQL server");
+                mysql_close(mysqlHandler_);
+                mysqlHandler_ = nullptr;
+            }
+
+            [[fallthrough]];//执行下面一个case
+        }
+        case CR_CONN_HOST_ERROR:
+        //表示无法连接到 MySQL 服务器主机
+        {
+            spdlog::error("_HandleMySQLErrno sql.sql Attempting to connect to MySQL server");
+
+            reconnecting_ = true;
+            const uint32_t hasError = open();
+            //重连成功的话
+            if (!hasError) 
+            {   
+                //进行预处理失败的话
+                if (!this->PrepareStatements()) 
+                {
+                    spdlog::error("_HandleMySQLErrno sql.sql Could not re-prepare statements!");
+                    std::this_thread::sleep_for(std::chrono::seconds(10));
+                    abort();
+                }
+
+                
+                spdlog::info("_HandleMySQLErrno sql.sql Successfully reconnected to {} @{}:{} ({}).",
+                    connectionInfo_.database, connectionInfo_.host, connectionInfo_.port,
+                        (connectionFlags_ & CONNECTION_ASYNC) ? "asynchronous" : "synchronous");
+                
+
+                reconnecting_ = false;
+                return true;
+            }
+
+            //尝试之后发现已经连接不上mysql了
+            if ((--attempts) == 0) 
+            {
+                spdlog::error("_HandleMySQLErrno sql.sql Failed to reconnect to the MySQL server, "
+                    "terminating the server to prevent data corruption!");
+                
+                std::this_thread::sleep_for(std::chrono::seconds(10));
+                abort();
+            }
+            else //再次进行重连尝试
+            {
+                std::this_thread::sleep_for(std::chrono::seconds(3));
+                return _HandleMySQLErrno(errNo, attempts);
+            }
+
+            break;
+        }
+        
+        case ER_LOCK_DEADLOCK:
+        //表示发生了死锁
+        {
+            return false;
+        }
+        
+        case ER_WRONG_VALUE_COUNT:
+        //表示查询中的值数量不正确
+        case ER_DUP_ENTRY:
+        //表示插入的数据违反了唯一约束
+        {
+            return false;
+        }
+            
+        case ER_BAD_FIELD_ERROR:
+        //字段错误
+        case ER_NO_SUCH_TABLE:
+        //查询了不存在的表
+        {
+            spdlog::error("_HandleMySQLErrno Your database structure is not up to date. Please make sure you've executed all queries in the sql/updates folders.");
+            std::this_thread::sleep_for(std::chrono::seconds(10));
+            abort();
+            return false;
+        }
+
+        case ER_PARSE_ERROR:
+        //sql解析错误
+        {
+            spdlog::error("_HandleMySQLErrno sql.sql Error while parsing SQL. Core fix required.");
+            std::this_thread::sleep_for(std::chrono::seconds(10));
+            abort();
+            return false;
+        }
+
+        default:
+        {
+            spdlog::error("_HandleMySQLErrno sql.sql Unhandled MySQL errno {}. Unexpected behaviour possible.", errNo);
+            return false;
+        }
+
+    }
+
+    return true;
+}
+
 
 }// namespace DATABASE 
