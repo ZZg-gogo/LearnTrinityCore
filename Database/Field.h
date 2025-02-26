@@ -78,6 +78,8 @@ class Field
 {
 public:
     friend class ResultSet;
+    friend class PreparedResultSet;
+
     using ptr = std::shared_ptr<Field>;
 
 public:
@@ -124,9 +126,10 @@ public:
 private:
     const char * value_;
     uint32_t length_;
+    bool isPrepared_; 
     const QueryResultFieldMetadata * meta_;
   
-    void setValue(const char* newValue, uint32_t newLength);
+    void setValue(const char* newValue, uint32_t newLength, bool isPrepared = false);
 
     void getBinarySizeChecked(uint8_t* buf, std::size_t size) const;
 

@@ -5,9 +5,11 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 #include <sys/types.h>
 
 #include "MySQLHacks.h"
+#include "PreparedStatement.h"
 
 /**
 * @file MySQLConnection.h
@@ -20,6 +22,7 @@ namespace  DATABASE
 {
 
 class ResultSet;
+class MySQLPreparedStatement;
 
 struct MysqlConnectionInfo
 {
@@ -55,7 +58,7 @@ class MysqlConnection
 {
 public: 
     using ptr = std::shared_ptr<MysqlConnection>;
-
+    using PreparedStatementContainer = std::vector<std::unique_ptr<MySQLPreparedStatement>>;
 public:
     /**
     * @brief 构造函数
@@ -83,6 +86,24 @@ public:
     */
     bool Execute(const char * sql);
 
+
+    /**
+    * @brief sync执行预处理语句
+    * @param base 预处理语句
+    * @return bool 执行结果
+    */
+    bool Execute(PreparedStatementBase * base);
+
+    /**
+    * @brief 新增预处理sql语句
+    * @param index 预处理语句的索引
+    * @param sql 待处理的sql语句
+    * @param flags 连接标志
+    */
+    void PreparedStatement(uint32_t index, const std::string& sql, ConnectionFlags flags);
+
+
+
     /**
     * @brief 预处理sql语句
     */
@@ -94,6 +115,30 @@ public:
     * @return ResultSet * 查询结果
     */
     ResultSet * Query(const char * sql);
+
+
+    /**
+    * @brief 执行预处理sql语句
+    * @param base 预处理语句
+    * @return PreparedResultSet* 查询结果
+    */
+    PreparedResultSet* Query(PreparedStatementBase * base);
+
+
+    /**
+    * @brief 查询预处理sql语句
+    * @param base 预处理语句
+    * @param mysqlStmt mysql预处理语句
+    * @param pResult 查询结果
+    * @param pRowCount 查询的行数
+    * @param pFieldCount 查询的字段数
+    */
+    bool _Query(PreparedStatementBase* base,
+        MySQLPreparedStatement** mysqlStmt,
+        MySQLResult** pResult,
+        uint64_t* pRowCount,
+        uint32_t* pFieldCount);
+
 
     /**
     * @brief 查询sql语句
@@ -118,9 +163,18 @@ protected:
     * @brief 预处理sql语句
     */
     virtual void doPrepareStatements(); 
+
+    /**
+    * @brief 获取预处理语句
+    * @param index 预处理语句的索引
+    * @return MySQLPreparedStatement* 预处理语句
+    */
+    MySQLPreparedStatement* GetPreparedStatement(uint32_t index);
+
 protected:
     bool reconnecting_;                        // 是否正在重连
     bool prepareError_;                        // 预处理语句是否有错误
+    PreparedStatementContainer preparedStatements_; // 预处理语句容器
 private:
     std::mutex mutex_;                          // 互斥锁
     MySQLHandle * mysqlHandler_;                //数据库的句柄

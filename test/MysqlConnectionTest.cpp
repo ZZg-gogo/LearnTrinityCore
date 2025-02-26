@@ -33,5 +33,24 @@ int main()
         spdlog::info("id:{}, name:{}, age:{}", pField[0].getInt32(), pField[1].getString(), pField[2].getInt32());
     }
 
+    
+    DATABASE::PreparedStatementBase pBase{0, 2};
+    conn.PreparedStatement(0, "insert into stu values(null, ?, ?)", DATABASE::CONNECTION_SYNCH);
+    pBase.setString(0, "zzh");
+    pBase.setInt32(1, 25);
+    conn.Execute(&pBase);
+
+    
+    DATABASE::PreparedStatementBase pBase1{1, 1};
+    conn.PreparedStatement(1, "select * from stu where name = ?", DATABASE::CONNECTION_SYNCH);
+    pBase1.setString(0, "zzh");
+    DATABASE::PreparedResultSet* pPrepraredres =  conn.Query(&pBase1);
+    
+    
+    do {
+        DATABASE::Field* pField =  pPrepraredres->Fetch();
+
+        spdlog::info("id:{}, name:{}, age:{}", pField[0].getInt32(), pField[1].getString(), pField[2].getInt32());
+    }while (pPrepraredres->nextRow());
     return 0;
 }

@@ -27,6 +27,8 @@ set(DATABASE_SRC
 ../Database/MySQLConnection.cpp
 ../Database/Field.cpp
 ../Database/QueryResult.cpp
+../Database/MySQLPreparedStatement.cpp
+../Database/PreparedStatement.cpp
 )
 
 

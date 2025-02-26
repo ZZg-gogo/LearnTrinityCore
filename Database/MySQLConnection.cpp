@@ -1,6 +1,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <memory>
 #include <mysql/mysqld_error.h>
 #include <mysql/errmsg.h>
 #include <mysql/mysql.h>
@@ -11,6 +12,7 @@
 #include "../Utilities/Util.h"
 #include "MySQLHacks.h"
 #include "QueryResult.h"
+#include "MySQLPreparedStatement.h"
 
 
 namespace DATABASE 
@@ -231,8 +233,11 @@ bool MysqlConnection::_Query(char const* sql, MySQLResult** pResult, MySQLField*
 
     spdlog::debug("MysqlConnection::_Query succ sql:{}", sql);
 
+    //获取查询结果
     *pResult = reinterpret_cast<MySQLResult*>(mysql_store_result(mysqlHandler_));
+    //获取查询的行数
     *pRowCount = mysql_affected_rows(mysqlHandler_);
+    //获取查询的字段数
     *pFieldCount = mysql_field_count(mysqlHandler_);
 
     if (!*pResult) 
@@ -252,13 +257,230 @@ bool MysqlConnection::_Query(char const* sql, MySQLResult** pResult, MySQLField*
 }
 
 
+
+/**
+* @brief 执行预处理sql语句
+* @param base 预处理语句
+* @return PreparedResultSet* 查询结果
+*/
+PreparedResultSet* MysqlConnection::Query(PreparedStatementBase * base)
+{
+
+
+    MySQLPreparedStatement * mysqlStmt = nullptr;
+    MySQLResult * result = nullptr;
+    uint64_t rowCount = 0;
+    uint32_t fieldCount = 0;
+
+    if (!_Query(base,
+        &mysqlStmt,
+        &result,
+        &rowCount,
+        &fieldCount)) 
+    {
+        return nullptr;
+    }
+
+    if (mysql_more_results(mysqlHandler_))
+    {
+        mysql_next_result(mysqlHandler_);
+    }
+
+    return new PreparedResultSet (mysqlStmt->getSTMT(), result, rowCount, fieldCount);
+
+}
+
+
+/**
+* @brief 查询预处理sql语句
+* @param stmt 预处理语句
+* @param mysqlStmt mysql预处理语句
+* @param pResult 查询结果
+* @param pRowCount 查询的行数
+* @param pFieldCount 查询的字段数
+*/
+bool MysqlConnection::_Query(PreparedStatementBase* base,
+    MySQLPreparedStatement** mysqlStmt,
+    MySQLResult** pResult,
+    uint64_t* pRowCount,
+    uint32_t* pFieldCount)
+{
+    if (!mysqlHandler_) 
+    {
+        return false;
+    }
+
+
+    //获取预处理语句的索引
+    uint32_t stmtIndex =  base->GetIndex();
+    //获取预处理语句
+    MySQLPreparedStatement* pMysqlStmt = GetPreparedStatement(stmtIndex);
+    //绑定参数
+    pMysqlStmt->bindPrameters(base);
+
+    *mysqlStmt = pMysqlStmt;
+    MYSQL_STMT* msqlSTMT = pMysqlStmt->getSTMT();
+    MYSQL_BIND* msqlBIND = pMysqlStmt->getBind();
+
+
+    if (mysql_stmt_bind_param(msqlSTMT, msqlBIND))
+    {
+        uint32_t lErrno = mysql_errno(mysqlHandler_);
+        spdlog::error("MysqlConnection::_Query mysql_stmt_bind_param   [ERROR]: [{}] {}", lErrno, mysql_stmt_error(msqlSTMT));
+
+        if (_HandleMySQLErrno(lErrno)) 
+        {
+            return _Query(base, mysqlStmt, pResult, pRowCount, pFieldCount);
+        }
+
+        pMysqlStmt->clearParameters();
+        return  false;
+    }
+
+    if (mysql_stmt_execute(msqlSTMT)) 
+    {
+        uint32_t lErrno = mysql_errno(mysqlHandler_);
+        spdlog::error("MysqlConnection::_Query mysql_stmt_execute   [ERROR]: [{}] {}", lErrno, mysql_stmt_error(msqlSTMT));
+
+        if (_HandleMySQLErrno(lErrno)) 
+        {
+            return _Query(base, mysqlStmt, pResult, pRowCount, pFieldCount);
+        }
+
+        pMysqlStmt->clearParameters();
+        return  false;
+    }
+
+    spdlog::info("MysqlConnection::_Query SUCC {}", pMysqlStmt->getQueryString());
+    pMysqlStmt->clearParameters();
+    
+    *pResult = reinterpret_cast<MySQLResult*>(mysql_stmt_result_metadata(msqlSTMT));
+    *pRowCount = mysql_stmt_num_rows(msqlSTMT);
+    *pFieldCount = mysql_stmt_field_count(msqlSTMT);
+
+    return true;
+}
+
+
+/**
+* @brief 新增预处理sql语句
+* @param index 预处理语句的索引
+* @param sql 待处理的sql语句
+* @param flags 连接标志
+*/
+void MysqlConnection::PreparedStatement(uint32_t index, const std::string& sql, ConnectionFlags flags)
+{
+    if (! (connectionFlags_&flags)) 
+    {
+        preparedStatements_[index].reset();
+        return;
+    }
+
+    if (index >= preparedStatements_.size()) 
+    {
+        preparedStatements_.resize((preparedStatements_.size()+1) * 2);
+    }
+
+
+    MYSQL_STMT* stmt = mysql_stmt_init(mysqlHandler_);
+
+    if (!stmt) 
+    {
+        spdlog::error("PreparedStatement sql.sql Could not initialize statement {}", sql);
+        spdlog::error("sql.sql", "{}", mysql_error(mysqlHandler_));
+        prepareError_ = true;
+        return;
+    }
+
+    if (mysql_stmt_prepare(stmt, sql.c_str(), sql.size()))
+    {
+        mysql_stmt_close(stmt);
+        prepareError_ = true;
+        return;
+    }
+    
+
+    preparedStatements_[index] = std::make_unique<MySQLPreparedStatement>(reinterpret_cast<MySQLStmt*>(stmt), sql);
+}
+
+
+/**
+* @brief sync执行预处理语句
+* @param base 预处理语句
+* @return bool 执行结果
+*/
+bool MysqlConnection::Execute(PreparedStatementBase * base)
+{
+
+    if (!mysqlHandler_) 
+    {
+        return false;
+    }
+    //获取预处理语句的索引
+    uint32_t stmtIndex =  base->GetIndex();
+    //获取预处理语句
+    MySQLPreparedStatement* pMysqlStmt = GetPreparedStatement(stmtIndex);
+    //绑定参数
+    pMysqlStmt->bindPrameters(base);
+
+
+    MYSQL_STMT* msqlSTMT = pMysqlStmt->getSTMT();
+    MYSQL_BIND* msqlBIND = pMysqlStmt->getBind();
+
+
+    if (mysql_stmt_bind_param(msqlSTMT, msqlBIND))
+    {
+        uint32_t lErrno = mysql_errno(mysqlHandler_);
+        spdlog::error("MysqlConnection::Execute mysql_stmt_bind_param   [ERROR]: [{}] {}", lErrno, mysql_stmt_error(msqlSTMT));
+
+        if (_HandleMySQLErrno(lErrno)) 
+        {
+            return Execute(base);
+        }
+
+        pMysqlStmt->clearParameters();
+        return  false;
+    }
+
+    if (mysql_stmt_execute(msqlSTMT)) 
+    {
+        uint32_t lErrno = mysql_errno(mysqlHandler_);
+        spdlog::error("MysqlConnection::Execute mysql_stmt_execute   [ERROR]: [{}] {}", lErrno, mysql_stmt_error(msqlSTMT));
+
+        if (_HandleMySQLErrno(lErrno)) 
+        {
+            return Execute(base);
+        }
+
+        pMysqlStmt->clearParameters();
+        return  false;
+    }
+
+    spdlog::info("MysqlConnection::Execute SUCC {}", pMysqlStmt->getQueryString());
+    pMysqlStmt->clearParameters();
+    return true;
+}
+
+
+
+/**
+* @brief 获取预处理语句
+* @param index 预处理语句的索引
+* @return MySQLPreparedStatement* 预处理语句
+*/
+MySQLPreparedStatement* MysqlConnection::GetPreparedStatement(uint32_t index)
+{
+    return preparedStatements_[index].get();
+}
+
+
 /**
 * @brief 预处理sql语句
 */
 bool MysqlConnection::PrepareStatements()
 {
     doPrepareStatements();
-    return true;
+    return !prepareError_;
 }
 
 void MysqlConnection::doPrepareStatements()
