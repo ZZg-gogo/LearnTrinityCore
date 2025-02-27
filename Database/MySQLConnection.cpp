@@ -13,6 +13,7 @@
 #include "MySQLHacks.h"
 #include "QueryResult.h"
 #include "MySQLPreparedStatement.h"
+#include "DatabaseWorker.h"
 
 
 namespace DATABASE 
@@ -50,6 +51,25 @@ MysqlConnection::MysqlConnection(MysqlConnectionInfo& info) :
 {
 
 }
+
+
+/**
+* @brief 构造函数
+* @param queue sql任务队列
+* @param info 数据库连接信息 异步
+*/
+MysqlConnection::MysqlConnection(THREADING::ProducerConsumerQueue<SQLOperation*>* queue,
+     MysqlConnectionInfo& info) :
+    reconnecting_(false),
+    prepareError_(false),
+    mysqlHandler_(nullptr),
+    connectionInfo_(info),
+    connectionFlags_(CONNECTION_ASYNC),
+    sqlQueue_(queue)
+{  
+    worker_ = std::make_unique<DatabaseWorker>(this, sqlQueue_);
+}
+
 
 MysqlConnection::~MysqlConnection()
 {
@@ -462,6 +482,17 @@ bool MysqlConnection::Execute(PreparedStatementBase * base)
 }
 
 
+
+
+void MysqlConnection::ping()
+{
+    mysql_ping(mysqlHandler_);
+}
+
+uint32_t MysqlConnection::getLastError() const
+{
+    return mysql_errno(mysqlHandler_);
+}
 
 /**
 * @brief 获取预处理语句

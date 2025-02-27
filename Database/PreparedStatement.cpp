@@ -1,6 +1,8 @@
 #include "PreparedStatement.h"
 #include "DatabaseEnvFwd.h"
-
+#include "QueryResult.h"
+#include "MySQLConnection.h"
+#include "QueryResult.h"
 
 
 namespace DATABASE 
@@ -102,10 +104,19 @@ bool PreparedStatementTask::execute()
 
     if (hasResult_) 
     {
-        
+        PreparedResultSet* res = conn_->Query(stmt_);
+        if (!res || !res->GetRowCount()) 
+        {
+            delete res;
+            result_->set_value(PreparedQueryResult(nullptr));
+            return false;
+        }
+
+        result_->set_value(PreparedQueryResult(res));
+        return true;
     }
 
-    return true;
+    return conn_->Execute(stmt_);
 }
 
 }

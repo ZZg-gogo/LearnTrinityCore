@@ -107,7 +107,7 @@ class PreparedStatementTask : public SQLOperation
         PreparedStatementTask(PreparedStatementBase* stmt, bool async = false);
         ~PreparedStatementTask();
 
-        bool execute() override;    //TODO
+        bool execute() override;    
         PreparedQueryResultFuture getFuture() { return result_->get_future(); }
 
     protected:

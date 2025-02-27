@@ -10,6 +10,7 @@
 
 #include "MySQLHacks.h"
 #include "PreparedStatement.h"
+#include "../Threading/ProducerConsumerQueue.h"
 
 /**
 * @file MySQLConnection.h
@@ -21,6 +22,7 @@
 namespace  DATABASE
 {
 
+class DatabaseWorker;
 class ResultSet;
 class MySQLPreparedStatement;
 
@@ -65,6 +67,14 @@ public:
     * @param info 数据库连接信息 同步
     */
     MysqlConnection(MysqlConnectionInfo& info);
+
+    /**
+    * @brief 构造函数
+    * @param queue sql任务队列
+    * @param info 数据库连接信息 异步
+    */
+    MysqlConnection(THREADING::ProducerConsumerQueue<SQLOperation*>* queue, MysqlConnectionInfo& connInfo);
+
     virtual ~MysqlConnection();
 
 public:
@@ -149,6 +159,10 @@ public:
     * @param pFieldCount 查询的字段数
     */
     bool _Query(char const* sql, MySQLResult** pResult, MySQLField** pFields, uint64_t* pRowCount, uint32_t* pFieldCount);
+
+    void ping();
+
+    uint32_t getLastError() const;
 private:
     /**
     * @brief 处理mysql错误
@@ -170,7 +184,15 @@ protected:
     * @return MySQLPreparedStatement* 预处理语句
     */
     MySQLPreparedStatement* GetPreparedStatement(uint32_t index);
+    bool LockIfReady()
+    {
+        return mutex_.try_lock();
+    }
 
+    void Unlock()
+    {
+        mutex_.unlock();
+    }
 protected:
     bool reconnecting_;                        // 是否正在重连
     bool prepareError_;                        // 预处理语句是否有错误
@@ -180,7 +202,8 @@ private:
     MySQLHandle * mysqlHandler_;                //数据库的句柄
     MysqlConnectionInfo& connectionInfo_;       // 数据库连接信息
     ConnectionFlags connectionFlags_;           // 连接标志 
-    
+    THREADING::ProducerConsumerQueue<SQLOperation*>* sqlQueue_; // sql队列
+    std::unique_ptr<DatabaseWorker> worker_;    // 数据库工作线程
 };
 
 

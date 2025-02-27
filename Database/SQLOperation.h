@@ -47,7 +47,7 @@ public:
 
     virtual void setConnection(MysqlConnection* con) { conn_ = con;}
 
-private:
+
     MysqlConnection* conn_;
 };
 
