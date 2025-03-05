@@ -29,6 +29,13 @@ set(DATABASE_SRC
 ../Database/QueryResult.cpp
 ../Database/MySQLPreparedStatement.cpp
 ../Database/PreparedStatement.cpp
+../Database/DatabaseWorker.cpp
+../Database/DatabaseWorkerPool.cpp 
+../Database/AdhocStatement.cpp 
+../Database/MySQLThreading.cpp 
+../Database/PreparedStatement.cpp 
+../Database/QueryCallback.cpp 
+../Database/QueryResult.cpp
 )
 
 
@@ -49,9 +56,22 @@ set(src
 )
 
 
+
+
+
+
+# 创建可执行文件
+add_executable(PingPongServer ../test/PingPong/PingPongServer.cpp  )
+target_link_libraries(PingPongServer ${LIBRARIES} )
+
+
+
+
+if(0)
 # 创建可执行文件
 add_executable(LearnTrinityCore ${src})
-
+# 链接 Boost 线程库和系统库
+target_link_libraries(LearnTrinityCore ${LIBRARIES})
 
 # 创建可执行文件
 add_executable(ThreadPoolTest ../test/ThreadPoolTest.cpp)
@@ -60,16 +80,13 @@ add_executable(ThreadPoolTest ../test/ThreadPoolTest.cpp)
 # 创建可执行文件
 add_executable(ProducerConsumerQueueTest ../test/ProducerConsumerQueueTest.cpp )
 
+
 # 创建可执行文件
 add_executable(MysqlConnectionTest ../test/MysqlConnectionTest.cpp ${UTIL_SRC} ${DATABASE_SRC})
 # 链接 Boost 线程库和系统库
 target_link_libraries(MysqlConnectionTest ${LIBRARIES} )
-
-if(0)
-
 endif()
 
 
 
-# 链接 Boost 线程库和系统库
-target_link_libraries(LearnTrinityCore ${LIBRARIES})
+
